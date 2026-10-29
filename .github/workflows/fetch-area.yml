@@ -1,0 +1,49 @@
+name: Fetch imagery
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "area = around a job site, overview = statewide low detail"
+        type: choice
+        options: [area, overview]
+        default: area
+      lat:
+        description: "Latitude (area mode)"
+        required: false
+      lon:
+        description: "Longitude (area mode)"
+        required: false
+permissions:
+  contents: write
+concurrency:
+  group: tiles
+  cancel-in-progress: false
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pillow==10.4.0
+      - name: Fetch tiles
+        env:
+          MODE: ${{ inputs.mode }}
+          LAT: ${{ inputs.lat }}
+          LON: ${{ inputs.lon }}
+        run: |
+          if [ "$MODE" = "area" ]; then python build.py area "$LAT" "$LON"; else python build.py overview; fi
+      - name: Commit
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          git config user.name "aquila-tiles-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "Add imagery ($MODE)"
+          git push
+      - name: Refresh CDN index
+        run: curl -s "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/index.js"
