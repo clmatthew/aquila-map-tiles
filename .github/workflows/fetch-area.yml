@@ -34,16 +34,23 @@ jobs:
           LAT: ${{ inputs.lat }}
           LON: ${{ inputs.lon }}
         run: |
-          if [ "$MODE" = "area" ]; then python build.py area "$LAT" "$LON"; else python build.py overview; fi
-      - name: Commit
+          if [ "$MODE" = "area" ]; then python build.py area "$LAT" "$LON" "$RUNNER_TEMP/new.json"
+          else python build.py overview "$RUNNER_TEMP/new.json"; fi
+      - name: Merge onto latest main and push
         env:
           MODE: ${{ inputs.mode }}
         run: |
           git config user.name "aquila-tiles-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet && exit 0
-          git commit -m "Add imagery ($MODE)"
-          git push
+          for attempt in 1 2 3 4 5; do
+            git fetch -q origin main && git reset -q --hard origin/main
+            python build.py merge "$RUNNER_TEMP/new.json"
+            git add -A
+            git diff --cached --quiet && exit 0
+            git commit -q -m "Add imagery ($MODE)"
+            git push -q origin HEAD:main && exit 0
+            sleep $((attempt * 10))
+          done
+          echo "Could not push after 5 attempts"; exit 1
       - name: Refresh CDN index
         run: curl -s "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/index.js"

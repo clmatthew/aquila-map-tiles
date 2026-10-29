@@ -4,8 +4,10 @@ Each block file t/<z>/<bx>/<by>.js holds up to 64 tiles of zoom z (its parent ti
 and calls AquilaTiles.add(blockKey, {"z/x/y": base64webp}). index.js lists every block.
 Claude pages can only load scripts from jsDelivr, so imagery has to travel as script files.
 
-usage: python build.py area <lat> <lon>    detail around one job site
-       python build.py overview            statewide overview, zooms 7-12
+usage: python build.py area <lat> <lon> <cache.json>   fetch detail around one job site
+       python build.py overview <cache.json>          fetch the statewide overview, zooms 7-12
+       python build.py merge <cache.json>             write fetched tiles into blocks and rebuild index.js
+Fetching and merging are separate so the workflow can retry the merge on top of newer commits.
 """
 import base64, concurrent.futures as cf, io, json, math, os, re, sys, urllib.request
 from PIL import Image
@@ -76,31 +78,36 @@ def write_index():
 def repo_mb():
     return sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk("t") for f in fs) / 1e6
 
-def main():
-    mode = sys.argv[1] if len(sys.argv) > 1 else ""
-    if mode == "area":
-        lat, lon = float(sys.argv[2]), float(sys.argv[3])
+def wanted_tiles(argv):
+    if argv[0] == "area":
+        lat, lon = float(argv[1]), float(argv[2])
         s, n, w, e = INDIANA
         if not (s <= lat <= n and w <= lon <= e):
             sys.exit(f"{lat},{lon} is outside Indiana")
-        wanted = [t for z, mi in AREA_TIERS.items() for t in tiles_around(lat, lon, z, mi)]
-    elif mode == "overview":
-        wanted = [t for z in OVERVIEW_ZOOMS for t in tiles_in_box(*INDIANA, z)]
-    else:
-        sys.exit(__doc__)
+        return [t for z, mi in AREA_TIERS.items() for t in tiles_around(lat, lon, z, mi)], argv[3]
+    if argv[0] == "overview":
+        return [t for z in OVERVIEW_ZOOMS for t in tiles_in_box(*INDIANA, z)], argv[1]
+    sys.exit(__doc__)
+
+def main():
+    argv = sys.argv[1:] or ["help"]
+    if argv[0] == "merge":
+        found = {tuple(map(int, k.split("/"))): v for k, v in json.load(open(argv[1])).items()}
+        nb = write_blocks(found); total = write_index(); mb = repo_mb()
+        print(f"merged {len(found)} tiles into {nb} blocks; {total} blocks in repo; tiles total {mb:.1f} MB")
+        if mb > REPO_LIMIT_MB:
+            sys.exit(f"Repo is {mb:.0f} MB, over the {REPO_LIMIT_MB} MB jsDelivr budget. Start a new tiles repo.")
+        return
+    wanted, cache = wanted_tiles(argv)
     have = set()
     for z, bx, by in {(z, x >> 3, y >> 3) for z, x, y in wanted}:
         have |= {tuple(map(int, k.split("/"))) for k in read_block(block_path(z, bx, by))}
     todo = [t for t in set(wanted) if t not in have]
     print(f"{len(wanted)} tiles wanted, {len(todo)} to fetch")
     with cf.ThreadPoolExecutor(16) as ex:
-        found = {t: b for t, b in ex.map(fetch, todo) if b}
-    nb = write_blocks(found)
-    total = write_index()
-    mb = repo_mb()
-    print(f"fetched {len(found)} tiles into {nb} blocks; {total} blocks in repo; tiles total {mb:.1f} MB")
-    if mb > REPO_LIMIT_MB:
-        sys.exit(f"Repo is {mb:.0f} MB, over the {REPO_LIMIT_MB} MB jsDelivr budget. Start a new tiles repo.")
+        found = {"/".join(map(str, t)): b for t, b in ex.map(fetch, todo) if b}
+    json.dump(found, open(cache, "w"))
+    print(f"fetched {len(found)} tiles")
 
 if __name__ == "__main__":
     main()
