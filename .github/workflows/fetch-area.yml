@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "area = around a job site, overview = statewide low detail"
+        description: "area = around a job site, overview = statewide imagery, state = statewide boundaries"
         type: choice
-        options: [area, overview]
+        options: [area, overview, state]
         default: area
       lat:
         description: "Latitude (area mode)"
@@ -34,8 +34,11 @@ jobs:
           LAT: ${{ inputs.lat }}
           LON: ${{ inputs.lon }}
         run: |
-          if [ "$MODE" = "area" ]; then python build.py area "$LAT" "$LON" "$RUNNER_TEMP/new.json"
-          else python build.py overview "$RUNNER_TEMP/new.json"; fi
+          case "$MODE" in
+            area) python build.py area "$LAT" "$LON" "$RUNNER_TEMP/new.json" ;;
+            overview) python build.py overview "$RUNNER_TEMP/new.json" ;;
+            state) python build.py state "$RUNNER_TEMP/new.json" ;;
+          esac
       - name: Merge onto latest main and push
         env:
           MODE: ${{ inputs.mode }}
